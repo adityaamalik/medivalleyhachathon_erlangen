@@ -54,38 +54,264 @@ const theme = createTheme({
 
 function App() {
   const [healthMetrics, setHealthMetrics] = useState({
-    heartRate: 72,
-    bloodPressure: { systolic: 120, diastolic: 80 },
-    oxygenLevel: 98,
-    respiratoryRate: 16,
-    temperature: 98.6,
-    stressLevel: "Low",
+    heartRate: null, // Will be populated from API
+    bloodPressure: { systolic: 120, diastolic: 80 }, // Dummy
+    oxygenLevel: 98, // Dummy
+    respiratoryRate: 16, // Dummy
+    temperature: 98.6, // Dummy
+    stressLevel: "Low", // Dummy
   });
+
+  const [apiStatus, setApiStatus] = useState({
+    camera: "initializing", // initializing, connected, stopped, error
+    websocket: "initializing", // initializing, connected, streaming, finished, error
+    isStreaming: false,
+    framesSent: 0,
+    totalFrames: 300,
+  });
+
+  const [showVideoPreview, setShowVideoPreview] = useState(false);
 
   const [rppgData, setRppgData] = useState([]);
   const canvasRef = useRef(null);
+  const videoRef = useRef(null);
+  const captureCanvasRef = useRef(null);
+  const wsRef = useRef(null);
+  const loopTimerRef = useRef(null);
 
-  // Simulate real-time updates (you'll replace this with actual rPPG data later)
+  // WebSocket and Camera API integration
   useEffect(() => {
-    const interval = setInterval(() => {
-      setHealthMetrics((prev) => ({
-        ...prev,
-        heartRate: 70 + Math.floor(Math.random() * 10),
-        oxygenLevel: 96 + Math.floor(Math.random() * 3),
-      }));
+    const WS_BASE = "ws://3.67.186.245:8003/ws/";
+    const API_KEY = "ZzTf4iMeWmMq-wifnlT3sAjyIZba6FYtF8DoDrvTfcQ";
+    const FPS = 30;
+    const FRAMES_TO_SEND = 300;
+    const ADVANCED = true;
 
-      // Simulate rPPG data points
-      setRppgData((prev) => {
-        const newData = [
+    let frameCount = 0;
+    let sentEndFrame = false;
+
+    // Helper function to get JPEG base64 without prefix
+    const getJpegBase64NoPrefix = (video, canvas, quality = 0.9) => {
+      const ctx = canvas.getContext("2d");
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", quality);
+      return dataUrl.replace(/^data:image\/jpeg;base64,/, "");
+    };
+
+    // Build payload for API
+    const buildPayload = (state, videoEl, canvasEl, advancedFlag) => {
+      return {
+        datapt_id: crypto.randomUUID(),
+        state,
+        frame_data: getJpegBase64NoPrefix(videoEl, canvasEl),
+        timestamp: (Date.now() / 1000).toString(),
+        advanced: advancedFlag,
+      };
+    };
+
+    // Build WebSocket URL
+    const buildWsUrl = (base, apiKey) => {
+      const urlBase = base.replace(/\/+$/, "");
+      const qs = new URLSearchParams({ api_key: apiKey }).toString();
+      return `${urlBase}/?${qs}`;
+    };
+
+    // Start camera and WebSocket connection
+    const startStreaming = async () => {
+      try {
+        console.log("🎥 Starting camera and WebSocket connection...");
+        setApiStatus((prev) => ({ ...prev, camera: "initializing" }));
+
+        // Get camera stream
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            frameRate: { ideal: FPS, max: FPS },
+          },
+          audio: false,
+        });
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+          console.log("✅ Camera started");
+          setApiStatus((prev) => ({ ...prev, camera: "connected" }));
+          setShowVideoPreview(true);
+        }
+
+        // Connect to WebSocket
+        const wsUrl = buildWsUrl(WS_BASE, API_KEY);
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+        setApiStatus((prev) => ({ ...prev, websocket: "initializing" }));
+
+        ws.onopen = () => {
+          console.log("✅ WebSocket connected");
+          setApiStatus((prev) => ({
+            ...prev,
+            websocket: "connected",
+            isStreaming: true,
+          }));
+
+          // Start sending frames
+          const tickMs = Math.max(1, Math.floor(1000 / Math.max(1, FPS)));
+          loopTimerRef.current = setInterval(() => {
+            if (!ws || ws.readyState >= 2) {
+              clearInterval(loopTimerRef.current);
+              return;
+            }
+
+            if (videoRef.current && captureCanvasRef.current) {
+              const payload = buildPayload(
+                "stream",
+                videoRef.current,
+                captureCanvasRef.current,
+                ADVANCED
+              );
+              ws.send(JSON.stringify(payload));
+              frameCount++;
+
+              setApiStatus((prev) => ({
+                ...prev,
+                websocket: "streaming",
+                framesSent: frameCount,
+              }));
+
+              if (frameCount >= FRAMES_TO_SEND) {
+                // Send final "end" payload
+                const finalPayload = buildPayload(
+                  "end",
+                  videoRef.current,
+                  captureCanvasRef.current,
+                  ADVANCED
+                );
+                ws.send(JSON.stringify(finalPayload));
+                clearInterval(loopTimerRef.current);
+                sentEndFrame = true;
+                console.log("🏁 Sent final frame. Waiting for results...");
+
+                // Stop camera after capture
+                if (videoRef.current && videoRef.current.srcObject) {
+                  const tracks = videoRef.current.srcObject.getTracks();
+                  tracks.forEach((track) => track.stop());
+                  videoRef.current.srcObject = null;
+                  console.log("📹 Camera stopped");
+                }
+
+                setApiStatus((prev) => ({
+                  ...prev,
+                  isStreaming: false,
+                  camera: "stopped",
+                }));
+              }
+            }
+          }, tickMs);
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            console.log("📥 Server response:", data);
+
+            // Update health metrics from API response
+            if (data.inference && data.inference.hr) {
+              setHealthMetrics((prev) => ({
+                ...prev,
+                heartRate: Math.round(data.inference.hr),
+              }));
+            }
+
+            // Update rPPG waveform from advanced data
+            if (
+              data.advanced &&
+              data.advanced.rppg &&
+              Array.isArray(data.advanced.rppg)
+            ) {
+              setRppgData(data.advanced.rppg.slice(-100));
+            }
+
+            // Check if streaming is finished
+            if (data.state === "finished") {
+              console.log("✅ Streaming finished");
+              setShowVideoPreview(false);
+              setApiStatus((prev) => ({
+                ...prev,
+                websocket: "finished",
+                isStreaming: false,
+              }));
+            }
+          } catch (error) {
+            console.log("📥 Server response (raw):", event.data);
+          }
+        };
+
+        ws.onerror = (error) => {
+          console.error("❌ WebSocket error:", error);
+          setApiStatus((prev) => ({
+            ...prev,
+            websocket: "error",
+            isStreaming: false,
+          }));
+        };
+
+        ws.onclose = (event) => {
+          console.log("🔌 WebSocket closed:", event.code, event.reason || "");
+          if (loopTimerRef.current) {
+            clearInterval(loopTimerRef.current);
+          }
+          setApiStatus((prev) => ({
+            ...prev,
+            isStreaming: false,
+          }));
+        };
+      } catch (error) {
+        console.error("❌ Failed to start streaming:", error);
+        setApiStatus((prev) => ({
           ...prev,
-          Math.sin(Date.now() / 200) * 50 + Math.random() * 10,
-        ];
-        return newData.slice(-100); // Keep last 100 points
-      });
-    }, 50);
+          camera: "error",
+          websocket: "error",
+          isStreaming: false,
+        }));
+      }
+    };
 
-    return () => clearInterval(interval);
+    // Start streaming when component mounts
+    startStreaming();
+
+    // Cleanup on unmount
+    return () => {
+      if (loopTimerRef.current) {
+        clearInterval(loopTimerRef.current);
+      }
+      if (wsRef.current && wsRef.current.readyState < 2) {
+        wsRef.current.close();
+      }
+      if (videoRef.current && videoRef.current.srcObject) {
+        const tracks = videoRef.current.srcObject.getTracks();
+        tracks.forEach((track) => track.stop());
+      }
+    };
   }, []);
+
+  // Simulate rPPG data if not receiving from API (for initial display)
+  useEffect(() => {
+    if (rppgData.length === 0 && apiStatus.websocket !== "streaming") {
+      const interval = setInterval(() => {
+        setRppgData((prev) => {
+          const newData = [
+            ...prev,
+            Math.sin(Date.now() / 200) * 50 + Math.random() * 10,
+          ];
+          return newData.slice(-100);
+        });
+      }, 50);
+
+      return () => clearInterval(interval);
+    }
+  }, [rppgData.length, apiStatus.websocket]);
 
   // Draw waveform on canvas
   useEffect(() => {
@@ -123,6 +349,28 @@ function App() {
 
     // Draw waveform with glow effect
     if (rppgData.length > 1) {
+      // Calculate dynamic scaling based on data range
+      const minValue = Math.min(...rppgData);
+      const maxValue = Math.max(...rppgData);
+      const dataRange = maxValue - minValue;
+
+      // Avoid division by zero and ensure minimum visibility
+      const effectiveRange = dataRange > 0.001 ? dataRange : 1;
+
+      // Use 80% of canvas height for the waveform (leave 10% padding top/bottom)
+      const availableHeight = height * 0.8;
+      const scaleFactor = availableHeight / effectiveRange;
+
+      // Center point for the waveform
+      const midValue = (maxValue + minValue) / 2;
+
+      // Function to scale and center the waveform
+      const scaleY = (value) => {
+        // Normalize value relative to center, apply scale, then position on canvas
+        const normalized = (value - midValue) * scaleFactor;
+        return height / 2 - normalized; // Invert Y (canvas origin is top-left)
+      };
+
       // Draw glowing background line
       ctx.strokeStyle = "#00ff8840";
       ctx.lineWidth = 8;
@@ -131,7 +379,7 @@ function App() {
       const step = width / rppgData.length;
       rppgData.forEach((value, index) => {
         const x = index * step;
-        const y = height / 2 + value;
+        const y = scaleY(value);
 
         if (index === 0) {
           ctx.moveTo(x, y);
@@ -148,7 +396,7 @@ function App() {
 
       rppgData.forEach((value, index) => {
         const x = index * step;
-        const y = height / 2 + value;
+        const y = scaleY(value);
 
         if (index === 0) {
           ctx.moveTo(x, y);
@@ -160,7 +408,15 @@ function App() {
     }
   }, [rppgData]);
 
-  const MetricCard = ({ icon: Icon, title, value, unit, status, color }) => (
+  const MetricCard = ({
+    icon: Icon,
+    title,
+    value,
+    unit,
+    status,
+    color,
+    isRealData = false,
+  }) => (
     <Card
       elevation={0}
       sx={{
@@ -233,9 +489,16 @@ function App() {
               width: 8,
               height: 8,
               borderRadius: "50%",
-              bgcolor: status === "normal" ? "#00ff88" : "#ffaa00",
-              boxShadow:
-                status === "normal" ? "0 0 12px #00ff88" : "0 0 12px #ffaa00",
+              bgcolor: isRealData
+                ? status === "normal"
+                  ? "#00ff88"
+                  : "#ffaa00"
+                : "#ff3366",
+              boxShadow: isRealData
+                ? status === "normal"
+                  ? "0 0 12px #00ff88"
+                  : "0 0 12px #ffaa00"
+                : "0 0 12px #ff3366",
               animation: status === "normal" ? "none" : "pulse 2s infinite",
             }}
           />
@@ -277,6 +540,51 @@ function App() {
           >
             REAL-TIME BIOMETRIC ANALYSIS SYSTEM
           </Typography>
+          {/* Status Indicator */}
+          <Box
+            sx={{
+              mt: 2,
+              display: "flex",
+              gap: 2,
+              justifyContent: "center",
+              alignItems: "center",
+            }}
+          >
+            <Typography
+              variant="caption"
+              sx={{ color: "#8899aa", fontSize: "0.75rem" }}
+            >
+              Camera:{" "}
+              {apiStatus.camera === "connected"
+                ? "✅"
+                : apiStatus.camera === "initializing"
+                ? "⏳"
+                : "❌"}
+            </Typography>
+            <Typography
+              variant="caption"
+              sx={{ color: "#8899aa", fontSize: "0.75rem" }}
+            >
+              WebSocket:{" "}
+              {apiStatus.websocket === "streaming"
+                ? "🔄 Streaming"
+                : apiStatus.websocket === "connected"
+                ? "✅ Connected"
+                : apiStatus.websocket === "finished"
+                ? "✅ Finished"
+                : apiStatus.websocket === "initializing"
+                ? "⏳ Connecting"
+                : "❌ Error"}
+            </Typography>
+            {apiStatus.isStreaming && (
+              <Typography
+                variant="caption"
+                sx={{ color: "#00ff88", fontSize: "0.75rem" }}
+              >
+                Frames: {apiStatus.framesSent}/{apiStatus.totalFrames}
+              </Typography>
+            )}
+          </Box>
         </Box>
 
         {/* Centered Content */}
@@ -289,6 +597,79 @@ function App() {
             overflow: "hidden",
           }}
         >
+          {/* Canvas for frame capture (hidden) */}
+          <canvas ref={captureCanvasRef} style={{ display: "none" }} />
+
+          {/* Video Preview Modal - Shows during streaming */}
+          <Box
+            sx={{
+              position: "fixed",
+              bottom: 20,
+              right: 20,
+              width: 240,
+              borderRadius: 2,
+              overflow: "hidden",
+              border: "2px solid #00ff88",
+              boxShadow: "0 0 20px #00ff8860",
+              bgcolor: "#000",
+              zIndex: 1000,
+              transition: "transform 0.3s ease, opacity 0.3s ease",
+              display: showVideoPreview ? "block" : "none",
+              "&:hover": {
+                transform: showVideoPreview ? "scale(1.05)" : "none",
+                boxShadow: showVideoPreview ? "0 0 30px #00ff88aa" : "none",
+              },
+            }}
+          >
+            <video
+              ref={videoRef}
+              autoPlay
+              muted
+              playsInline
+              style={{
+                width: "100%",
+                height: "auto",
+                display: "block",
+              }}
+            />
+            {showVideoPreview && (
+              <Box
+                sx={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bgcolor: "rgba(0, 0, 0, 0.7)",
+                  p: 1,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: "#00ff88",
+                    fontSize: "0.65rem",
+                    fontWeight: 600,
+                    letterSpacing: 1,
+                  }}
+                >
+                  🔴 LIVE
+                </Typography>
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: "#8899aa",
+                    fontSize: "0.6rem",
+                  }}
+                >
+                  {apiStatus.framesSent}/{apiStatus.totalFrames}
+                </Typography>
+              </Box>
+            )}
+          </Box>
+
           {/* rPPG Waveform - No borders, no labels */}
           <Box sx={{ mb: 4, display: "flex", justifyContent: "center" }}>
             <canvas
@@ -329,17 +710,25 @@ function App() {
                   <MetricCard
                     icon={Favorite}
                     title="Heart Rate"
-                    value={healthMetrics.heartRate}
+                    value={
+                      healthMetrics.heartRate !== null
+                        ? healthMetrics.heartRate
+                        : apiStatus.isStreaming
+                        ? "..."
+                        : "--"
+                    }
                     unit="BPM"
                     status={
+                      healthMetrics.heartRate &&
                       healthMetrics.heartRate > 60 &&
                       healthMetrics.heartRate < 100
                         ? "normal"
                         : "warning"
                     }
                     color="#ff3366"
+                    isRealData={healthMetrics.heartRate !== null}
                   />,
-                  // 1: Blood Pressure
+                  // 1: Blood Pressure (Dummy)
                   <MetricCard
                     icon={MonitorHeart}
                     title="Blood Pressure"
@@ -347,8 +736,9 @@ function App() {
                     unit="mmHg"
                     status="normal"
                     color="#00ff88"
+                    isRealData={false}
                   />,
-                  // 2: Oxygen Level
+                  // 2: Oxygen Level (Dummy)
                   <MetricCard
                     icon={Opacity}
                     title="Oxygen Level"
@@ -358,8 +748,9 @@ function App() {
                       healthMetrics.oxygenLevel >= 95 ? "normal" : "warning"
                     }
                     color="#00d9ff"
+                    isRealData={false}
                   />,
-                  // 3: Respiratory Rate
+                  // 3: Respiratory Rate (Dummy)
                   <MetricCard
                     icon={Air}
                     title="Respiratory Rate"
@@ -367,8 +758,9 @@ function App() {
                     unit="breaths/min"
                     status="normal"
                     color="#ffaa00"
+                    isRealData={false}
                   />,
-                  // 4: Temperature
+                  // 4: Temperature (Dummy)
                   <MetricCard
                     icon={Thermostat}
                     title="Temperature"
@@ -376,6 +768,7 @@ function App() {
                     unit="°F"
                     status="normal"
                     color="#ff66ff"
+                    isRealData={false}
                   />,
                   // 5: Stress Level (custom card)
                   <Card
@@ -443,8 +836,9 @@ function App() {
                             width: 8,
                             height: 8,
                             borderRadius: "50%",
-                            bgcolor: "#00ff88",
-                            boxShadow: "0 0 12px #00ff88",
+                            bgcolor: "#ff3366",
+                            boxShadow: "0 0 12px #ff3366",
+                            animation: "pulse 2s infinite",
                           }}
                         />
                       </Box>
@@ -476,7 +870,9 @@ function App() {
                         flexBasis: "33.333333% !important",
                       }}
                     >
-                      <Box sx={{ p: 3, height: "100%", width: "100%" }}>{content}</Box>
+                      <Box sx={{ p: 3, height: "100%", width: "100%" }}>
+                        {content}
+                      </Box>
                     </Grid>
                   );
                 })}
