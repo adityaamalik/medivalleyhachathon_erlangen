@@ -72,6 +72,7 @@ function App() {
 
   const [showVideoPreview, setShowVideoPreview] = useState(false);
   const [isStarted, setIsStarted] = useState(false);
+  const [heartRateWarning, setHeartRateWarning] = useState(null); // null, "low", "high"
 
   const [rppgData, setRppgData] = useState([]);
   const canvasRef = useRef(null);
@@ -190,10 +191,20 @@ function App() {
 
           // Update health metrics from API response (live updates)
           if (data.inference && data.inference.hr) {
+            const heartRate = Math.round(data.inference.hr);
             setHealthMetrics((prev) => ({
               ...prev,
-              heartRate: Math.round(data.inference.hr),
+              heartRate: heartRate,
             }));
+
+            // Check for heart rate warnings (exclude invalid values like -1)
+            if (heartRate > 0 && heartRate < 60) {
+              setHeartRateWarning("low");
+            } else if (heartRate > 100) {
+              setHeartRateWarning("high");
+            } else {
+              setHeartRateWarning(null);
+            }
           }
 
           // Update rPPG waveform from advanced data (live updates)
@@ -401,6 +412,80 @@ function App() {
     }
   }, [rppgData]);
 
+  // Reusable Alert Modal Component
+  const AlertModal = ({
+    show,
+    type = "warning", // "warning", "info", "error", "success"
+    title,
+    message,
+    position = { top: 20, right: 20 }, // Customizable position
+    color = "#ff3366",
+  }) => {
+    if (!show) return null;
+
+    return (
+      <Box
+        sx={{
+          position: "fixed",
+          top: position.top,
+          right: position.right,
+          left: position.left,
+          bottom: position.bottom,
+          minWidth: 300,
+          maxWidth: 400,
+          borderRadius: 2,
+          overflow: "hidden",
+          border: `2px solid ${color}`,
+          boxShadow: `0 0 30px ${color}60`,
+          bgcolor: `${color}20`,
+          zIndex: 1000,
+          animation: "pulseAlert 1.5s infinite",
+          "@keyframes pulseAlert": {
+            "0%, 100%": {
+              opacity: 1,
+              boxShadow: `0 0 30px ${color}60`,
+            },
+            "50%": {
+              opacity: 0.8,
+              boxShadow: `0 0 50px ${color}aa`,
+            },
+          },
+        }}
+      >
+        <Box sx={{ p: 2.5 }}>
+          <Typography
+            variant="h6"
+            sx={{
+              color: color,
+              fontFamily: '"Orbitron", monospace',
+              fontWeight: 700,
+              letterSpacing: 1.5,
+              textShadow: `0 0 15px ${color}`,
+              mb: 1.5,
+              textAlign: "center",
+              fontSize: "0.95rem",
+            }}
+          >
+            {title}
+          </Typography>
+          <Typography
+            variant="body2"
+            sx={{
+              color: "#ffffff",
+              fontFamily: '"Rajdhani", sans-serif',
+              fontWeight: 600,
+              textAlign: "center",
+              fontSize: "0.9rem",
+              lineHeight: 1.5,
+            }}
+          >
+            {message}
+          </Typography>
+        </Box>
+      </Box>
+    );
+  };
+
   const MetricCard = ({
     icon: Icon,
     title,
@@ -578,14 +663,6 @@ function App() {
                   ? "⚪ Idle"
                   : "❌ Error"}
               </Typography>
-              {apiStatus.isStreaming && (
-                <Typography
-                  variant="caption"
-                  sx={{ color: "#00ff88", fontSize: "0.75rem" }}
-                >
-                  Frames: {apiStatus.framesSent}
-                </Typography>
-              )}
             </Box>
 
             {/* Control Buttons */}
@@ -719,11 +796,47 @@ function App() {
                     fontSize: "0.6rem",
                   }}
                 >
-                  {apiStatus.framesSent}/{apiStatus.totalFrames}
+                  Frames: {apiStatus.framesSent}
                 </Typography>
               </Box>
             )}
           </Box>
+
+          {/* Heart Rate Warning Alert Modal - Top Left */}
+          <AlertModal
+            show={heartRateWarning !== null}
+            type="warning"
+            title="⚠️ HEART RATE WARNING ⚠️"
+            message={
+              heartRateWarning === "low" ? (
+                <>
+                  Your heart rate is below normal levels (
+                  <span style={{ color: "#ff3366", fontWeight: 700 }}>
+                    {healthMetrics.heartRate} BPM
+                  </span>
+                  ).
+                  <br />
+                  <br />
+                  Consider stopping for a coffee break to boost your alertness
+                  and energy levels.
+                </>
+              ) : heartRateWarning === "high" ? (
+                <>
+                  Your heart rate is elevated (
+                  <span style={{ color: "#ff3366", fontWeight: 700 }}>
+                    {healthMetrics.heartRate} BPM
+                  </span>
+                  ).
+                  <br />
+                  <br />
+                  Please try to relax by taking deep breaths and consider
+                  parking the vehicle nearby.
+                </>
+              ) : null
+            }
+            position={{ top: 20, left: 20 }}
+            color="#ff3366"
+          />
 
           {/* rPPG Waveform - No borders, no labels */}
           <Box sx={{ mb: 4, display: "flex", justifyContent: "center" }}>
