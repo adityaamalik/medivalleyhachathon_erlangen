@@ -16,48 +16,124 @@
 .dashboard-header {
   text-align: center;
   color: white;
-  margin-bottom: 40px;
-  padding: 20px 0;
+  margin-bottom: 30px;
+  padding: 15px 0;
 }
 
 .dashboard-header h1 {
-  font-size: 3rem;
+  font-size: 2.5rem;
   font-weight: 700;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
 }
 
 .subtitle {
-  font-size: 1.2rem;
+  font-size: 1rem;
   opacity: 0.9;
   font-weight: 300;
 }
 
-.metrics-container {
+/* Main Two-Column Layout */
+.main-container {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 25px;
-  max-width: 1400px;
-  margin: 0 auto 40px;
-  padding: 0 20px;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  max-width: 1800px;
+  margin: 0 auto;
+  height: calc(100vh - 180px);
+}
+
+/* Left Panel */
+.left-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.video-feed-section,
+.waveform-section {
+  background: white;
+  border-radius: 20px;
+  padding: 25px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+
+.video-feed-section {
+  flex: 1;
+}
+
+.waveform-section {
+  flex: 0.6;
+}
+
+.section-title {
+  color: #333;
+  font-size: 1.2rem;
+  margin-bottom: 15px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.video-feed-box {
+  width: 100%;
+  height: calc(100% - 45px);
+  background: #1a1a2e;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #888;
+  font-size: 1.1rem;
+  min-height: 300px;
+}
+
+.waveform-canvas {
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  background: #1a1a2e;
+}
+
+/* Right Panel */
+.right-panel {
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 20px;
+  padding: 25px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  overflow-y: auto;
+}
+
+.panel-title {
+  color: #333;
+  font-size: 1.5rem;
+  margin-bottom: 20px;
+  font-weight: 700;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding-bottom: 15px;
+  border-bottom: 3px solid #667eea;
 }
 
 .metric-card {
   background: white;
-  border-radius: 20px;
-  padding: 30px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  border-radius: 15px;
+  padding: 20px;
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 15px;
   position: relative;
   transition: transform 0.3s ease, box-shadow 0.3s ease;
   overflow: hidden;
+  border: 2px solid transparent;
 }
 
 .metric-card:hover {
-  transform: translateY(-5px);
-  box-shadow: 0 15px 40px rgba(0, 0, 0, 0.3);
+  transform: translateY(-3px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+  border-color: #667eea;
 }
 
 .metric-card::before {
@@ -65,14 +141,15 @@
   position: absolute;
   top: 0;
   left: 0;
-  width: 100%;
-  height: 5px;
-  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+  width: 5px;
+  height: 100%;
+  background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
 }
 
 .metric-icon {
-  font-size: 3rem;
+  font-size: 2.5rem;
   flex-shrink: 0;
+  margin-left: 10px;
 }
 
 .metric-content {
@@ -81,32 +158,32 @@
 
 .metric-content h3 {
   color: #666;
-  font-size: 0.9rem;
+  font-size: 0.75rem;
   text-transform: uppercase;
-  letter-spacing: 1px;
-  margin-bottom: 10px;
+  letter-spacing: 0.8px;
+  margin-bottom: 8px;
   font-weight: 600;
 }
 
 .metric-value {
-  font-size: 3rem;
+  font-size: 2.2rem;
   font-weight: 700;
   color: #333;
   line-height: 1;
-  margin-bottom: 5px;
+  margin-bottom: 3px;
 }
 
 .metric-value-text {
-  font-size: 2rem;
+  font-size: 1.5rem;
   font-weight: 700;
   color: #333;
   line-height: 1;
-  margin-bottom: 5px;
+  margin-bottom: 3px;
 }
 
 .metric-unit {
   color: #999;
-  font-size: 0.9rem;
+  font-size: 0.8rem;
   font-weight: 500;
 }
 
@@ -138,64 +215,74 @@
 @keyframes pulse {
   0%, 100% {
     opacity: 1;
+    transform: scale(1);
   }
   50% {
-    opacity: 0.5;
+    opacity: 0.6;
+    transform: scale(1.1);
   }
 }
 
-.camera-feed-placeholder {
-  max-width: 1400px;
-  margin: 0 auto;
-  padding: 0 20px;
-}
-
-.camera-feed-placeholder h3 {
-  color: white;
-  font-size: 1.5rem;
-  margin-bottom: 20px;
-  text-align: center;
-}
-
-.feed-box {
-  background: rgba(255, 255, 255, 0.95);
-  border-radius: 20px;
-  padding: 60px;
-  text-align: center;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
-  min-height: 400px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.feed-box p {
-  color: #666;
-  font-size: 1.2rem;
-  font-weight: 500;
-}
+/* Google Fonts Import for Car Display Look */
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Rajdhani:wght@300;400;500;600;700&display=swap');
 
 /* Responsive adjustments */
-@media (max-width: 768px) {
+@media (max-width: 1200px) {
+  .main-container {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .left-panel {
+    order: 2;
+  }
+
+  .right-panel {
+    order: 1;
+    max-height: 600px;
+  }
+
   .dashboard-header h1 {
     font-size: 2rem;
   }
+}
 
-  .metrics-container {
-    grid-template-columns: 1fr;
+@media (max-width: 768px) {
+  .dashboard-header h1 {
+    font-size: 1.8rem;
+  }
+
+  .subtitle {
+    font-size: 0.9rem;
+  }
+
+  .main-container {
     gap: 15px;
   }
 
-  .metric-card {
+  .video-feed-section,
+  .waveform-section,
+  .right-panel {
     padding: 20px;
   }
 
-  .metric-value {
-    font-size: 2.5rem;
+  .metric-card {
+    padding: 15px;
   }
 
-  .feed-box {
-    padding: 40px 20px;
-    min-height: 300px;
+  .metric-value {
+    font-size: 1.8rem;
+  }
+
+  .metric-icon {
+    font-size: 2rem;
+  }
+
+  .panel-title {
+    font-size: 1.2rem;
+  }
+
+  .section-title {
+    font-size: 1rem;
   }
 }

@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>WS Bridge Demo (Browser) — Organized</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        font-family: system-ui, Arial, sans-serif;
+        max-width: 960px;
+        margin: 24px auto;
+        padding: 0 12px;
+      }
+      .row {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .stack {
+        display: grid;
+        gap: 8px;
+      }
+      video,
+      canvas {
+        max-width: 100%;
+        border-radius: 8px;
+      }
+      label {
+        display: block;
+        font-size: 12px;
+        color: #666;
+        margin-bottom: 4px;
+      }
+      input[type="text"],
+      input[type="number"] {
+        padding: 6px 8px;
+        width: 100%;
+        max-width: 520px;
+      }
+      button {
+        padding: 10px 14px;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      pre {
+        background: #111;
+        color: #c7ffc7;
+        padding: 12px;
+        border-radius: 8px;
+        max-height: 420px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .col {
+        flex: 1 1 320px;
+      }
+      .muted {
+        font-size: 12px;
+        color: #777;
+      }
+      .pill {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 20px;
+        background: #eee;
+        color: #333;
+        font-size: 12px;
+        margin-left: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>WS Bridge Demo <span class="pill">Payload‑first</span></h1>
+
+    <div class="row">
+      <div class="col stack">
+        <div>
+          <label>Backend WS Base (no trailing slash)</label>
+          <input id="wsBase" type="text" value="ws://3.67.186.245:8003/ws/" />
+        </div>
+        <div>
+          <label>API Key</label>
+          <input
+            id="apiKey"
+            type="text"
+            value="ZzTf4iMeWmMq-wifnlT3sAjyIZba6FYtF8DoDrvTfcQ"
+          />
+        </div>
+
+        <div class="row">
+          <div class="col">
+            <label>FPS</label>
+            <input id="fps" type="number" min="1" max="60" value="30" />
+          </div>
+          <div class="col">
+            <label># Frames to send</label>
+            <input id="frames" type="number" min="1" max="5000" value="300" />
+          </div>
+        </div>
+
+        <div class="row" style="align-items: center">
+          <div>
+            <label>Advanced</label>
+            <input id="advanced" type="checkbox" checked />
+            <span class="muted"
+              >If checked, server may stream rPPG arrays in responses.</span
+            >
+          </div>
+        </div>
+
+        <div class="row" style="margin-top: 12px">
+          <button id="startBtn">Start streaming</button>
+          <button id="stopBtn" disabled>Stop</button>
+        </div>
+      </div>
+
+      <div class="col">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="canvas" style="display: none"></canvas>
+        <div class="muted" style="margin-top: 6px">
+          Each frame is sent as JPEG base64 (no prefix).
+        </div>
+      </div>
+    </div>
+
+    <h3>Server Responses</h3>
+    <pre id="out">Waiting…</pre>
+
+    <script>
+      // ---- Elements ----
+      const els = {
+        wsBase: document.getElementById("wsBase"),
+        apiKey: document.getElementById("apiKey"),
+        fps: document.getElementById("fps"),
+        frames: document.getElementById("frames"),
+        advanced: document.getElementById("advanced"),
+        start: document.getElementById("startBtn"),
+        stop: document.getElementById("stopBtn"),
+        video: document.getElementById("video"),
+        canvas: document.getElementById("canvas"),
+        out: document.getElementById("out"),
+      };
+
+      // ---- State ----
+      let ws = null;
+      let loopTimer = null;
+      let sentEndFrame = false;
+
+      // ---- Helpers ----
+      function logFullMessage(objOrText) {
+        try {
+          if (typeof objOrText === "string") {
+            els.out.textContent = objOrText;
+          } else {
+            els.out.textContent = JSON.stringify(objOrText, null, 2);
+          }
+        } catch {
+          els.out.textContent = String(objOrText);
+        }
+      }
+
+      function stopCamera() {
+        const s = els.video.srcObject;
+        if (s && s.getTracks) s.getTracks().forEach((t) => t.stop());
+        els.video.srcObject = null;
+      }
+
+      function getJpegBase64NoPrefix(video, canvas, quality = 0.9) {
+        const ctx = canvas.getContext("2d");
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+        return dataUrl.replace(/^data:image\/jpeg;base64,/, "");
+      }
+
+      function buildPayload(state, videoEl, canvasEl, advancedFlag) {
+        // --- Payload builder (single place to inspect the schema) ---
+        return {
+          datapt_id: crypto.randomUUID(), // UUIDv4
+          state, // "stream" or "end"
+          frame_data: getJpegBase64NoPrefix(videoEl, canvasEl), // base64, no prefix
+          timestamp: (Date.now() / 1000).toString(), // seconds as string
+          advanced: advancedFlag, // boolean
+        };
+      }
+
+      function buildWsUrl(base, apiKey) {
+        const urlBase = base.replace(/\/+$/, ""); // trim trailing slash
+        const qs = new URLSearchParams({ api_key: apiKey }).toString();
+        return `${urlBase}/?${qs}`;
+      }
+
+      async function connect(wsUrl) {
+        return new Promise((resolve, reject) => {
+          const socket = new WebSocket(wsUrl);
+          socket.onopen = () => resolve(socket);
+          socket.onerror = (e) => reject(e);
+        });
+      }
+
+      async function startStreaming() {
+        try {
+          els.out.textContent = "Connecting…";
+
+          // --- Gather runtime options
+          const fps = Number(els.fps.value || 30);
+          const frames = Number(els.frames.value || 300);
+          const apiKey = els.apiKey.value.trim();
+          const advanced = !!els.advanced.checked;
+
+          // --- Camera
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+              frameRate: { ideal: fps, max: fps },
+            },
+            audio: false,
+          });
+          els.video.srcObject = stream;
+          await els.video.play();
+
+          // --- WebSocket
+          const wsUrl = buildWsUrl(els.wsBase.value, apiKey);
+          ws = await connect(wsUrl);
+
+          // --- Event handlers
+          ws.onmessage = (ev) => {
+            try {
+              logFullMessage(JSON.parse(ev.data));
+            } catch {
+              logFullMessage(ev.data);
+            }
+          };
+          ws.onerror = (e) => {
+            console.error("WS error", e);
+            els.out.textContent = "WebSocket error (see console).";
+          };
+          ws.onclose = (e) => {
+            els.start.disabled = false;
+            els.stop.disabled = true;
+            stopCamera();
+            console.log("WS closed", e.code, e.reason || "");
+          };
+
+          // --- UI state
+          sentEndFrame = false;
+          els.stop.textContent = "Stop";
+          els.out.textContent = "Connected. Streaming frames…";
+          els.start.disabled = true;
+          els.stop.disabled = false;
+
+          // --- Main loop
+          let frame = 0;
+          const tickMs = Math.max(1, Math.floor(1000 / Math.max(1, fps)));
+          loopTimer = setInterval(() => {
+            if (!ws || ws.readyState >= 2) {
+              clearInterval(loopTimer);
+              return;
+            }
+
+            const payload = buildPayload(
+              "stream",
+              els.video,
+              els.canvas,
+              advanced
+            );
+            ws.send(JSON.stringify(payload));
+            frame++;
+
+            if (frame >= frames) {
+              // final "end" payload
+              const finalPayload = buildPayload(
+                "end",
+                els.video,
+                els.canvas,
+                advanced
+              );
+              ws.send(JSON.stringify(finalPayload));
+              clearInterval(loopTimer);
+              sentEndFrame = true;
+              els.stop.textContent = "Reset";
+              els.out.textContent = "Sent final frame. Waiting for results…";
+            }
+          }, tickMs);
+        } catch (err) {
+          console.error(err);
+          els.out.textContent = "Failed to start. Check console.";
+          if (ws && ws.readyState < 2) ws.close();
+          ws = null;
+          stopCamera();
+        }
+      }
+
+      function stopOrReset() {
+        if (loopTimer) clearInterval(loopTimer);
+        loopTimer = null;
+
+        if (ws && ws.readyState < 2) ws.close();
+        ws = null;
+
+        stopCamera();
+
+        if (sentEndFrame) {
+          els.out.textContent = "Reset.";
+          els.stop.textContent = "Stop";
+          sentEndFrame = false;
+        } else {
+          els.out.textContent = "Stopped.";
+        }
+
+        els.start.disabled = false;
+        els.stop.disabled = true;
+      }
+
+      // ---- Wire up UI ----
+      els.start.addEventListener("click", startStreaming);
+      els.stop.addEventListener("click", stopOrReset);
+    </script>
+  </body>
+</html>
