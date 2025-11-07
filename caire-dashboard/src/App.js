@@ -245,7 +245,12 @@ function App() {
     console.log("🛑 Stopping streaming...");
 
     // Send final "end" payload
-    if (wsRef.current && wsRef.current.readyState === 1 && videoRef.current && captureCanvasRef.current) {
+    if (
+      wsRef.current &&
+      wsRef.current.readyState === 1 &&
+      videoRef.current &&
+      captureCanvasRef.current
+    ) {
       const finalPayload = buildPayload(
         "end",
         videoRef.current,
@@ -300,7 +305,6 @@ function App() {
       }
     };
   }, []);
-
 
   // Draw waveform on canvas
   useEffect(() => {
@@ -521,13 +525,13 @@ function App() {
               letterSpacing: 3,
             }}
           >
-            CAIRE DRIVER HEALTH MONITOR
+            DRIVER VITALS
           </Typography>
           <Typography
             variant="body2"
             sx={{ color: "#00d9ff", letterSpacing: 2, mt: 0.5 }}
           >
-            REAL-TIME BIOMETRIC ANALYSIS SYSTEM
+            REAL-TIME DRIVER ANALYSIS SYSTEM FOR CAIRE
           </Typography>
           {/* Status Indicator and Control Buttons */}
           <Box
