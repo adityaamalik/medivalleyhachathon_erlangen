@@ -9,6 +9,7 @@ import {
   Container,
   ThemeProvider,
   createTheme,
+  Button,
 } from "@mui/material";
 import {
   Favorite,
@@ -63,14 +64,14 @@ function App() {
   });
 
   const [apiStatus, setApiStatus] = useState({
-    camera: "initializing", // initializing, connected, stopped, error
-    websocket: "initializing", // initializing, connected, streaming, finished, error
+    camera: "idle", // idle, initializing, connected, stopped, error
+    websocket: "idle", // idle, initializing, connected, streaming, finished, error
     isStreaming: false,
     framesSent: 0,
-    totalFrames: 300,
   });
 
   const [showVideoPreview, setShowVideoPreview] = useState(false);
+  const [isStarted, setIsStarted] = useState(false);
 
   const [rppgData, setRppgData] = useState([]);
   const canvasRef = useRef(null);
@@ -79,209 +80,213 @@ function App() {
   const wsRef = useRef(null);
   const loopTimerRef = useRef(null);
 
-  // WebSocket and Camera API integration
-  useEffect(() => {
-    const WS_BASE = "ws://3.67.186.245:8003/ws/";
-    const API_KEY = "ZzTf4iMeWmMq-wifnlT3sAjyIZba6FYtF8DoDrvTfcQ";
-    const FPS = 30;
-    const FRAMES_TO_SEND = 300;
-    const ADVANCED = true;
+  const frameCountRef = useRef(0);
 
-    let frameCount = 0;
-    let sentEndFrame = false;
+  // Constants
+  const WS_BASE = "ws://3.67.186.245:8003/ws/";
+  const API_KEY = "ZzTf4iMeWmMq-wifnlT3sAjyIZba6FYtF8DoDrvTfcQ";
+  const FPS = 30;
+  const ADVANCED = true;
 
-    // Helper function to get JPEG base64 without prefix
-    const getJpegBase64NoPrefix = (video, canvas, quality = 0.9) => {
-      const ctx = canvas.getContext("2d");
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL("image/jpeg", quality);
-      return dataUrl.replace(/^data:image\/jpeg;base64,/, "");
+  // Helper function to get JPEG base64 without prefix
+  const getJpegBase64NoPrefix = (video, canvas, quality = 0.9) => {
+    const ctx = canvas.getContext("2d");
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL("image/jpeg", quality);
+    return dataUrl.replace(/^data:image\/jpeg;base64,/, "");
+  };
+
+  // Build payload for API
+  const buildPayload = (state, videoEl, canvasEl, advancedFlag) => {
+    return {
+      datapt_id: crypto.randomUUID(),
+      state,
+      frame_data: getJpegBase64NoPrefix(videoEl, canvasEl),
+      timestamp: (Date.now() / 1000).toString(),
+      advanced: advancedFlag,
     };
+  };
 
-    // Build payload for API
-    const buildPayload = (state, videoEl, canvasEl, advancedFlag) => {
-      return {
-        datapt_id: crypto.randomUUID(),
-        state,
-        frame_data: getJpegBase64NoPrefix(videoEl, canvasEl),
-        timestamp: (Date.now() / 1000).toString(),
-        advanced: advancedFlag,
-      };
-    };
+  // Build WebSocket URL
+  const buildWsUrl = (base, apiKey) => {
+    const urlBase = base.replace(/\/+$/, "");
+    const qs = new URLSearchParams({ api_key: apiKey }).toString();
+    return `${urlBase}/?${qs}`;
+  };
 
-    // Build WebSocket URL
-    const buildWsUrl = (base, apiKey) => {
-      const urlBase = base.replace(/\/+$/, "");
-      const qs = new URLSearchParams({ api_key: apiKey }).toString();
-      return `${urlBase}/?${qs}`;
-    };
+  // Start streaming function
+  const startStreaming = async () => {
+    try {
+      console.log("🎥 Starting camera and WebSocket connection...");
+      setApiStatus((prev) => ({ ...prev, camera: "initializing" }));
+      setIsStarted(true);
+      frameCountRef.current = 0;
 
-    // Start camera and WebSocket connection
-    const startStreaming = async () => {
-      try {
-        console.log("🎥 Starting camera and WebSocket connection...");
-        setApiStatus((prev) => ({ ...prev, camera: "initializing" }));
+      // Get camera stream
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          frameRate: { ideal: FPS, max: FPS },
+        },
+        audio: false,
+      });
 
-        // Get camera stream
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-            frameRate: { ideal: FPS, max: FPS },
-          },
-          audio: false,
-        });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+        console.log("✅ Camera started");
+        setApiStatus((prev) => ({ ...prev, camera: "connected" }));
+        setShowVideoPreview(true);
+      }
 
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-          console.log("✅ Camera started");
-          setApiStatus((prev) => ({ ...prev, camera: "connected" }));
-          setShowVideoPreview(true);
-        }
+      // Connect to WebSocket
+      const wsUrl = buildWsUrl(WS_BASE, API_KEY);
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+      setApiStatus((prev) => ({ ...prev, websocket: "initializing" }));
 
-        // Connect to WebSocket
-        const wsUrl = buildWsUrl(WS_BASE, API_KEY);
-        const ws = new WebSocket(wsUrl);
-        wsRef.current = ws;
-        setApiStatus((prev) => ({ ...prev, websocket: "initializing" }));
-
-        ws.onopen = () => {
-          console.log("✅ WebSocket connected");
-          setApiStatus((prev) => ({
-            ...prev,
-            websocket: "connected",
-            isStreaming: true,
-          }));
-
-          // Start sending frames
-          const tickMs = Math.max(1, Math.floor(1000 / Math.max(1, FPS)));
-          loopTimerRef.current = setInterval(() => {
-            if (!ws || ws.readyState >= 2) {
-              clearInterval(loopTimerRef.current);
-              return;
-            }
-
-            if (videoRef.current && captureCanvasRef.current) {
-              const payload = buildPayload(
-                "stream",
-                videoRef.current,
-                captureCanvasRef.current,
-                ADVANCED
-              );
-              ws.send(JSON.stringify(payload));
-              frameCount++;
-
-              setApiStatus((prev) => ({
-                ...prev,
-                websocket: "streaming",
-                framesSent: frameCount,
-              }));
-
-              if (frameCount >= FRAMES_TO_SEND) {
-                // Send final "end" payload
-                const finalPayload = buildPayload(
-                  "end",
-                  videoRef.current,
-                  captureCanvasRef.current,
-                  ADVANCED
-                );
-                ws.send(JSON.stringify(finalPayload));
-                clearInterval(loopTimerRef.current);
-                sentEndFrame = true;
-                console.log("🏁 Sent final frame. Waiting for results...");
-
-                // Stop camera after capture
-                if (videoRef.current && videoRef.current.srcObject) {
-                  const tracks = videoRef.current.srcObject.getTracks();
-                  tracks.forEach((track) => track.stop());
-                  videoRef.current.srcObject = null;
-                  console.log("📹 Camera stopped");
-                }
-
-                setApiStatus((prev) => ({
-                  ...prev,
-                  isStreaming: false,
-                  camera: "stopped",
-                }));
-              }
-            }
-          }, tickMs);
-        };
-
-        ws.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            console.log("📥 Server response:", data);
-
-            // Update health metrics from API response
-            if (data.inference && data.inference.hr) {
-              setHealthMetrics((prev) => ({
-                ...prev,
-                heartRate: Math.round(data.inference.hr),
-              }));
-            }
-
-            // Update rPPG waveform from advanced data
-            if (
-              data.advanced &&
-              data.advanced.rppg &&
-              Array.isArray(data.advanced.rppg)
-            ) {
-              setRppgData(data.advanced.rppg.slice(-100));
-            }
-
-            // Check if streaming is finished
-            if (data.state === "finished") {
-              console.log("✅ Streaming finished");
-              setShowVideoPreview(false);
-              setApiStatus((prev) => ({
-                ...prev,
-                websocket: "finished",
-                isStreaming: false,
-              }));
-            }
-          } catch (error) {
-            console.log("📥 Server response (raw):", event.data);
-          }
-        };
-
-        ws.onerror = (error) => {
-          console.error("❌ WebSocket error:", error);
-          setApiStatus((prev) => ({
-            ...prev,
-            websocket: "error",
-            isStreaming: false,
-          }));
-        };
-
-        ws.onclose = (event) => {
-          console.log("🔌 WebSocket closed:", event.code, event.reason || "");
-          if (loopTimerRef.current) {
-            clearInterval(loopTimerRef.current);
-          }
-          setApiStatus((prev) => ({
-            ...prev,
-            isStreaming: false,
-          }));
-        };
-      } catch (error) {
-        console.error("❌ Failed to start streaming:", error);
+      ws.onopen = () => {
+        console.log("✅ WebSocket connected");
         setApiStatus((prev) => ({
           ...prev,
-          camera: "error",
+          websocket: "connected",
+          isStreaming: true,
+        }));
+
+        // Start sending frames continuously
+        const tickMs = Math.max(1, Math.floor(1000 / Math.max(1, FPS)));
+        loopTimerRef.current = setInterval(() => {
+          if (!ws || ws.readyState >= 2) {
+            clearInterval(loopTimerRef.current);
+            return;
+          }
+
+          if (videoRef.current && captureCanvasRef.current) {
+            const payload = buildPayload(
+              "stream",
+              videoRef.current,
+              captureCanvasRef.current,
+              ADVANCED
+            );
+            ws.send(JSON.stringify(payload));
+            frameCountRef.current++;
+
+            setApiStatus((prev) => ({
+              ...prev,
+              websocket: "streaming",
+              framesSent: frameCountRef.current,
+            }));
+          }
+        }, tickMs);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          console.log("📥 Server response:", data);
+
+          // Update health metrics from API response (live updates)
+          if (data.inference && data.inference.hr) {
+            setHealthMetrics((prev) => ({
+              ...prev,
+              heartRate: Math.round(data.inference.hr),
+            }));
+          }
+
+          // Update rPPG waveform from advanced data (live updates)
+          if (
+            data.advanced &&
+            data.advanced.rppg &&
+            Array.isArray(data.advanced.rppg)
+          ) {
+            setRppgData(data.advanced.rppg.slice(-100));
+          }
+        } catch (error) {
+          console.log("📥 Server response (raw):", event.data);
+        }
+      };
+
+      ws.onerror = (error) => {
+        console.error("❌ WebSocket error:", error);
+        setApiStatus((prev) => ({
+          ...prev,
           websocket: "error",
           isStreaming: false,
         }));
-      }
-    };
+      };
 
-    // Start streaming when component mounts
-    startStreaming();
+      ws.onclose = (event) => {
+        console.log("🔌 WebSocket closed:", event.code, event.reason || "");
+        if (loopTimerRef.current) {
+          clearInterval(loopTimerRef.current);
+        }
+        setApiStatus((prev) => ({
+          ...prev,
+          isStreaming: false,
+        }));
+      };
+    } catch (error) {
+      console.error("❌ Failed to start streaming:", error);
+      setApiStatus((prev) => ({
+        ...prev,
+        camera: "error",
+        websocket: "error",
+        isStreaming: false,
+      }));
+      setIsStarted(false);
+    }
+  };
 
-    // Cleanup on unmount
+  // Stop streaming function
+  const stopStreaming = () => {
+    console.log("🛑 Stopping streaming...");
+
+    // Send final "end" payload
+    if (wsRef.current && wsRef.current.readyState === 1 && videoRef.current && captureCanvasRef.current) {
+      const finalPayload = buildPayload(
+        "end",
+        videoRef.current,
+        captureCanvasRef.current,
+        ADVANCED
+      );
+      wsRef.current.send(JSON.stringify(finalPayload));
+      console.log("🏁 Sent final frame");
+    }
+
+    // Clear interval
+    if (loopTimerRef.current) {
+      clearInterval(loopTimerRef.current);
+      loopTimerRef.current = null;
+    }
+
+    // Close WebSocket
+    if (wsRef.current && wsRef.current.readyState < 2) {
+      wsRef.current.close();
+    }
+
+    // Stop camera
+    if (videoRef.current && videoRef.current.srcObject) {
+      const tracks = videoRef.current.srcObject.getTracks();
+      tracks.forEach((track) => track.stop());
+      videoRef.current.srcObject = null;
+      console.log("📹 Camera stopped");
+    }
+
+    setShowVideoPreview(false);
+    setApiStatus((prev) => ({
+      ...prev,
+      isStreaming: false,
+      camera: "stopped",
+      websocket: "stopped",
+    }));
+    setIsStarted(false);
+  };
+
+  // Cleanup on unmount
+  useEffect(() => {
     return () => {
       if (loopTimerRef.current) {
         clearInterval(loopTimerRef.current);
@@ -296,22 +301,6 @@ function App() {
     };
   }, []);
 
-  // Simulate rPPG data if not receiving from API (for initial display)
-  useEffect(() => {
-    if (rppgData.length === 0 && apiStatus.websocket !== "streaming") {
-      const interval = setInterval(() => {
-        setRppgData((prev) => {
-          const newData = [
-            ...prev,
-            Math.sin(Date.now() / 200) * 50 + Math.random() * 10,
-          ];
-          return newData.slice(-100);
-        });
-      }, 50);
-
-      return () => clearInterval(interval);
-    }
-  }, [rppgData.length, apiStatus.websocket]);
 
   // Draw waveform on canvas
   useEffect(() => {
@@ -540,50 +529,112 @@ function App() {
           >
             REAL-TIME BIOMETRIC ANALYSIS SYSTEM
           </Typography>
-          {/* Status Indicator */}
+          {/* Status Indicator and Control Buttons */}
           <Box
             sx={{
               mt: 2,
               display: "flex",
-              gap: 2,
+              gap: 3,
               justifyContent: "center",
               alignItems: "center",
+              flexWrap: "wrap",
             }}
           >
-            <Typography
-              variant="caption"
-              sx={{ color: "#8899aa", fontSize: "0.75rem" }}
-            >
-              Camera:{" "}
-              {apiStatus.camera === "connected"
-                ? "✅"
-                : apiStatus.camera === "initializing"
-                ? "⏳"
-                : "❌"}
-            </Typography>
-            <Typography
-              variant="caption"
-              sx={{ color: "#8899aa", fontSize: "0.75rem" }}
-            >
-              WebSocket:{" "}
-              {apiStatus.websocket === "streaming"
-                ? "🔄 Streaming"
-                : apiStatus.websocket === "connected"
-                ? "✅ Connected"
-                : apiStatus.websocket === "finished"
-                ? "✅ Finished"
-                : apiStatus.websocket === "initializing"
-                ? "⏳ Connecting"
-                : "❌ Error"}
-            </Typography>
-            {apiStatus.isStreaming && (
+            {/* Status Indicators */}
+            <Box sx={{ display: "flex", gap: 2, alignItems: "center" }}>
               <Typography
                 variant="caption"
-                sx={{ color: "#00ff88", fontSize: "0.75rem" }}
+                sx={{ color: "#8899aa", fontSize: "0.75rem" }}
               >
-                Frames: {apiStatus.framesSent}/{apiStatus.totalFrames}
+                Camera:{" "}
+                {apiStatus.camera === "connected"
+                  ? "✅"
+                  : apiStatus.camera === "initializing"
+                  ? "⏳"
+                  : apiStatus.camera === "idle"
+                  ? "⚪"
+                  : apiStatus.camera === "stopped"
+                  ? "⏹️"
+                  : "❌"}
               </Typography>
-            )}
+              <Typography
+                variant="caption"
+                sx={{ color: "#8899aa", fontSize: "0.75rem" }}
+              >
+                WebSocket:{" "}
+                {apiStatus.websocket === "streaming"
+                  ? "🔄 Streaming"
+                  : apiStatus.websocket === "connected"
+                  ? "✅ Connected"
+                  : apiStatus.websocket === "stopped"
+                  ? "⏹️ Stopped"
+                  : apiStatus.websocket === "initializing"
+                  ? "⏳ Connecting"
+                  : apiStatus.websocket === "idle"
+                  ? "⚪ Idle"
+                  : "❌ Error"}
+              </Typography>
+              {apiStatus.isStreaming && (
+                <Typography
+                  variant="caption"
+                  sx={{ color: "#00ff88", fontSize: "0.75rem" }}
+                >
+                  Frames: {apiStatus.framesSent}
+                </Typography>
+              )}
+            </Box>
+
+            {/* Control Buttons */}
+            <Box sx={{ display: "flex", gap: 2 }}>
+              <Button
+                variant="contained"
+                onClick={startStreaming}
+                disabled={isStarted}
+                sx={{
+                  bgcolor: "#00ff88",
+                  color: "#000",
+                  fontWeight: 700,
+                  px: 3,
+                  py: 0.75,
+                  fontSize: "0.8rem",
+                  letterSpacing: 1,
+                  fontFamily: '"Orbitron", monospace',
+                  "&:hover": {
+                    bgcolor: "#00dd77",
+                  },
+                  "&:disabled": {
+                    bgcolor: "#004433",
+                    color: "#006655",
+                  },
+                }}
+              >
+                START
+              </Button>
+              <Button
+                variant="contained"
+                onClick={stopStreaming}
+                disabled={!isStarted}
+                sx={{
+                  bgcolor: "#ff3366",
+                  color: "#fff",
+                  fontWeight: 700,
+                  px: 3,
+                  py: 0.75,
+                  fontSize: "0.8rem",
+                  letterSpacing: 1,
+                  fontFamily: '"Orbitron", monospace',
+                  "&:hover": {
+                    bgcolor: "#dd2255",
+                  },
+                  "&:disabled": {
+                    bgcolor: "#442233",
+                    color: "#663344",
+                  },
+                }}
+              >
+                STOP
+              </Button>
+            </Box>
           </Box>
         </Box>
 
