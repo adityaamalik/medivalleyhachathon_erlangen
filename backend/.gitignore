@@ -1,0 +1,9 @@
+# created by virtualenv automatically
+bin/
+data/
+lib/
+etc/
+catboost_info/
+share/
+processed_data/
+models/
