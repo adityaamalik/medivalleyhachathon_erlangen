@@ -1,5 +1,5 @@
 import "./App.css";
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Box,
   Grid,
@@ -63,6 +63,15 @@ function App() {
     stressLevel: "Low", // Dummy
   });
 
+  const [arrhythmiaStatus, setArrhythmiaStatus] = useState({
+      status: "Waiting...",
+      isArrhythmic: null,
+      probability: null,
+      confidence: null,
+      samplesCollected: 0,
+      samplesNeeded: 1000,
+    });
+
   const [apiStatus, setApiStatus] = useState({
     camera: "idle", // idle, initializing, connected, stopped, error
     websocket: "idle", // idle, initializing, connected, streaming, finished, error
@@ -84,7 +93,7 @@ function App() {
   const frameCountRef = useRef(0);
 
   // Constants
-  const WS_BASE = "ws://3.67.186.245:8003/ws/";
+  const WS_BASE = "ws://localhost:8000/ws/";
   const API_KEY = "ZzTf4iMeWmMq-wifnlT3sAjyIZba6FYtF8DoDrvTfcQ";
   const FPS = 30;
   const ADVANCED = true;
@@ -215,6 +224,32 @@ function App() {
           ) {
             setRppgData(data.advanced.rppg.slice(-100));
           }
+
+          if (data.arrhythmia) {
+            const arrhythmia = data.arrhythmia;
+            
+            if (arrhythmia.is_arrhythmic !== undefined) {
+              // Full prediction available
+              setArrhythmiaStatus({
+                status: arrhythmia.status || "Unknown",
+                isArrhythmic: arrhythmia.is_arrhythmic,
+                probability: arrhythmia.probability,
+                confidence: arrhythmia.confidence,
+                samplesCollected: arrhythmia.samples_analyzed || 1000,
+                samplesNeeded: 1000,
+              });
+            } else if (arrhythmia.samples_collected !== undefined) {
+              // Still collecting data
+              setArrhythmiaStatus({
+                status: arrhythmia.status || "Collecting data...",
+                isArrhythmic: null,
+                probability: null,
+                confidence: null,
+                samplesCollected: arrhythmia.samples_collected,
+                samplesNeeded: arrhythmia.samples_needed || 1000,
+              });
+            }
+          }
         } catch (error) {
           console.log("📥 Server response (raw):", event.data);
         }
@@ -299,6 +334,16 @@ function App() {
       websocket: "stopped",
     }));
     setIsStarted(false);
+
+    // Reset arrhythmia status
+    setArrhythmiaStatus({
+      status: "Waiting...",
+      isArrhythmic: null,
+      probability: null,
+      confidence: null,
+      samplesCollected: 0,
+      samplesNeeded: 1000,
+    });
   };
 
   // Cleanup on unmount
@@ -939,6 +984,144 @@ function App() {
                     isRealData={false}
                   />,
                   // 5: Stress Level (custom card)
+                  <Card
+                    elevation={0}
+                    sx={{
+                      height: "100%",
+                      bgcolor: "transparent",
+                      border: "none",
+                    }}
+                  >
+                    <CardContent
+                      sx={{
+                        p: 0,
+                        "&:last-child": { pb: 0 },
+                        height: "100%",
+                        display: "flex",
+                        flexDirection: "column",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <Box display="flex" alignItems="center" gap={1.5}>
+                        <Box
+                          sx={{
+                            bgcolor: arrhythmiaStatus.isArrhythmic === true
+                              ? "#ff336620"
+                              : arrhythmiaStatus.isArrhythmic === false
+                              ? "#00ff8820"
+                              : "#9966ff20",
+                            borderRadius: 1.5,
+                            p: 1,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            border: "2px solid",
+                            borderColor: arrhythmiaStatus.isArrhythmic === true
+                              ? "#ff3366"
+                              : arrhythmiaStatus.isArrhythmic === false
+                              ? "#00ff88"
+                              : "#9966ff",
+                          }}
+                        >
+                          <MonitorHeart 
+                            sx={{ 
+                              color: arrhythmiaStatus.isArrhythmic === true
+                                ? "#ff3366"
+                                : arrhythmiaStatus.isArrhythmic === false
+                                ? "#00ff88"
+                                : "#9966ff",
+                              fontSize: 28 
+                            }} 
+                          />
+                        </Box>
+                        <Box flex={1}>
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: "#8899aa",
+                              textTransform: "uppercase",
+                              fontWeight: 600,
+                              letterSpacing: 1,
+                              fontSize: "0.65rem",
+                            }}
+                          >
+                            Arrhythmia Status
+                          </Typography>
+                          <Box display="flex" alignItems="baseline" gap={0.5}>
+                            <Typography
+                              variant="h4"
+                              fontWeight={700}
+                              sx={{
+                                lineHeight: 1,
+                                color: arrhythmiaStatus.isArrhythmic === true
+                                  ? "#ff3366"
+                                  : arrhythmiaStatus.isArrhythmic === false
+                                  ? "#00ff88"
+                                  : "#9966ff",
+                                fontFamily: '"Orbitron", monospace',
+                                textShadow: arrhythmiaStatus.isArrhythmic === true
+                                  ? "0 0 10px #ff336680"
+                                  : arrhythmiaStatus.isArrhythmic === false
+                                  ? "0 0 10px #00ff8880"
+                                  : "0 0 10px #9966ff80",
+                                fontSize: arrhythmiaStatus.status.length > 10 ? "1.5rem" : "2rem",
+                              }}
+                            >
+                              {arrhythmiaStatus.status}
+                            </Typography>
+                          </Box>
+                          {arrhythmiaStatus.confidence !== null && (
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                color: "#8899aa",
+                                fontSize: "0.6rem",
+                                display: "block",
+                                mt: 0.5,
+                              }}
+                            >
+                              Confidence: {(arrhythmiaStatus.confidence * 100).toFixed(1)}%
+                            </Typography>
+                          )}
+                          {arrhythmiaStatus.isArrhythmic === null && (
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                color: "#8899aa",
+                                fontSize: "0.6rem",
+                                display: "block",
+                                mt: 0.5,
+                              }}
+                            >
+                              {arrhythmiaStatus.samplesCollected}/{arrhythmiaStatus.samplesNeeded} samples
+                            </Typography>
+                          )}
+                        </Box>
+                        <Box
+                          sx={{
+                            width: 8,
+                            height: 8,
+                            borderRadius: "50%",
+                            bgcolor: arrhythmiaStatus.isArrhythmic === true
+                              ? "#ff3366"
+                              : arrhythmiaStatus.isArrhythmic === false
+                              ? "#00ff88"
+                              : "#9966ff",
+                            boxShadow: arrhythmiaStatus.isArrhythmic === true
+                              ? "0 0 12px #ff3366"
+                              : arrhythmiaStatus.isArrhythmic === false
+                              ? "0 0 12px #00ff88"
+                              : "0 0 12px #9966ff",
+                            animation: arrhythmiaStatus.isArrhythmic === true
+                              ? "pulse 2s infinite"
+                              : arrhythmiaStatus.isArrhythmic === false
+                              ? "none"
+                              : "pulse 2s infinite",
+                          }}
+                        />
+                      </Box>
+                    </CardContent>
+                  </Card>,
                   <Card
                     elevation={0}
                     sx={{
