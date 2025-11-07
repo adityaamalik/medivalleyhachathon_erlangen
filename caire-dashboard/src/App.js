@@ -93,8 +93,7 @@ function App() {
   const frameCountRef = useRef(0);
 
   // Constants
-  const WS_BASE = "ws://localhost:8000/ws/";
-  const API_KEY = "ZzTf4iMeWmMq-wifnlT3sAjyIZba6FYtF8DoDrvTfcQ";
+  const WS_URL = "ws://localhost:8000/ws/";
   const FPS = 30;
   const ADVANCED = true;
 
@@ -119,12 +118,6 @@ function App() {
     };
   };
 
-  // Build WebSocket URL
-  const buildWsUrl = (base, apiKey) => {
-    const urlBase = base.replace(/\/+$/, "");
-    const qs = new URLSearchParams({ api_key: apiKey }).toString();
-    return `${urlBase}/?${qs}`;
-  };
 
   // Start streaming function
   const startStreaming = async () => {
@@ -152,9 +145,8 @@ function App() {
         setShowVideoPreview(true);
       }
 
-      // Connect to WebSocket
-      const wsUrl = buildWsUrl(WS_BASE, API_KEY);
-      const ws = new WebSocket(wsUrl);
+      // Connect to WebSocket (API key is handled securely on backend)
+      const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
       setApiStatus((prev) => ({ ...prev, websocket: "initializing" }));
 

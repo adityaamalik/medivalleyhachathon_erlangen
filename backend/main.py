@@ -6,15 +6,20 @@ Proxies video frames to external rPPG API and performs arrhythmia detection
 import asyncio
 import json
 import logging
+import os
 from typing import Optional, Dict, List
 from collections import deque
 import numpy as np
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import websockets
 import tensorflow as tf
 from scipy import signal as scipy_signal
 from scipy.interpolate import interp1d
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -34,6 +39,10 @@ app.add_middleware(
 
 # External rPPG API configuration
 EXTERNAL_API_BASE = "ws://3.67.186.245:8003/ws/"
+RPPG_API_KEY = os.getenv("RPPG_API_KEY")
+
+if not RPPG_API_KEY:
+    raise ValueError("RPPG_API_KEY environment variable is not set. Please check your .env file.")
 
 # Model configuration
 MODEL_PATH = "cnn_lstm_arrhythmia_detector.h5"
@@ -243,12 +252,10 @@ async def health():
 
 
 @app.websocket("/ws/")
-async def websocket_endpoint(
-    websocket: WebSocket,
-    api_key: str = Query(..., description="API key for external rPPG service")
-):
+async def websocket_endpoint(websocket: WebSocket):
     """
     WebSocket endpoint that proxies to external rPPG API and adds arrhythmia detection
+    API key is securely stored on the backend
     """
     await websocket.accept()
     logger.info(f"✅ Client connected")
@@ -256,8 +263,8 @@ async def websocket_endpoint(
     # Initialize signal buffer for this connection
     signal_buffer = SignalBuffer()
     
-    # Connect to external rPPG API
-    external_ws_url = f"{EXTERNAL_API_BASE}?api_key={api_key}"
+    # Connect to external rPPG API using backend's API key
+    external_ws_url = f"{EXTERNAL_API_BASE}?api_key={RPPG_API_KEY}"
     external_ws = None
     
     try:

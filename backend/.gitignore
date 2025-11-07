@@ -7,3 +7,6 @@ catboost_info/
 share/
 processed_data/
 models/
+
+# Environment variables (contains sensitive API keys)
+.env
